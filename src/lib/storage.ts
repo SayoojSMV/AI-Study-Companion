@@ -1,4 +1,5 @@
 import {
+  buildSeededStudyMetrics,
   createSeededWorkspace,
   createStarterWorkspaceForNewStudent,
   DEMO_STUDENT,
@@ -175,6 +176,17 @@ export function loadWorkspaceData(user: StudentUser): StudentWorkspaceData {
     Array.isArray(existing.documents) &&
     typeof existing.messagesByDoc === 'object'
   ) {
+    if (!existing.studyMetrics) {
+      const hydrated: StudentWorkspaceData = {
+        ...existing,
+        studyMetrics: buildSeededStudyMetrics(
+          existing.documents.map((d) => d.id),
+          Boolean(user.isDemo)
+        ),
+      };
+      saveWorkspaceData(user.id, hydrated);
+      return hydrated;
+    }
     return existing;
   }
 
@@ -198,3 +210,27 @@ export function resetWorkspaceToDefault(user: StudentUser): StudentWorkspaceData
   saveWorkspaceData(user.id, fresh);
   return fresh;
 }
+
+const THEME_KEY = 'study_companion_theme_v1';
+
+export function loadThemePreference(): 'light' | 'dark' {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'dark' || saved === 'light') return saved;
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches) {
+      return 'dark';
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  return 'light';
+}
+
+export function saveThemePreference(theme: 'light' | 'dark'): void {
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    // Ignore storage write errors
+  }
+}
+

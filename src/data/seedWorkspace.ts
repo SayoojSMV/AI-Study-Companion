@@ -395,6 +395,51 @@ export function createSeededWorkspace(userId: string): StudentWorkspaceData {
         ],
       },
     ],
+    studyMetrics: buildSeededStudyMetrics([doc1.id, doc2.id], true),
+  };
+}
+
+export function getLocalDateKey(offsetDays = 0): string {
+  const now = new Date();
+  const target = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays);
+  const y = target.getFullYear();
+  const m = String(target.getMonth() + 1).padStart(2, '0');
+  const d = String(target.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function buildSeededStudyMetrics(
+  docIds: string[],
+  populated: boolean
+) {
+  if (!populated) {
+    return {
+      dailyMinutes: { [getLocalDateKey(0)]: 1 },
+      minutesByDoc: docIds[0] ? { [docIds[0]]: 1 } : {},
+      completedDocIds: [],
+      dailyGoalMinutes: 45,
+    };
+  }
+
+  const dailyMinutes: Record<string, number> = {
+    [getLocalDateKey(-6)]: 32,
+    [getLocalDateKey(-5)]: 48,
+    [getLocalDateKey(-4)]: 25,
+    [getLocalDateKey(-3)]: 56,
+    [getLocalDateKey(-2)]: 41,
+    [getLocalDateKey(-1)]: 62,
+    [getLocalDateKey(0)]: 28,
+  };
+
+  const minutesByDoc: Record<string, number> = {};
+  if (docIds[0]) minutesByDoc[docIds[0]] = 184;
+  if (docIds[1]) minutesByDoc[docIds[1]] = 108;
+
+  return {
+    dailyMinutes,
+    minutesByDoc,
+    completedDocIds: docIds[0] ? [docIds[0]] : [],
+    dailyGoalMinutes: 45,
   };
 }
 
@@ -415,5 +460,7 @@ export function createStarterWorkspaceForNewStudent(userId: string): StudentWork
     summariesByDoc: {},
     quizzesByDoc: {},
     comparisons: [],
+    studyMetrics: buildSeededStudyMetrics([doc.id], false),
   };
 }
+

@@ -114,12 +114,26 @@ export interface ComparisonRun {
   vectorEngine: string;
 }
 
+export interface StudyMetrics {
+  dailyMinutes: Record<string, number>;
+  minutesByDoc: Record<string, number>;
+  completedDocIds: string[];
+  dailyGoalMinutes: number;
+}
+
 export interface StudentWorkspaceData {
   documents: StudyDocument[];
   messagesByDoc: Record<string, ChatMessage[]>;
   summariesByDoc: Record<string, RevisionSummary>;
   quizzesByDoc: Record<string, SavedQuiz>;
   comparisons: ComparisonRun[];
+  studyMetrics: StudyMetrics;
 }
 
-export type WorkspaceTab = 'chat' | 'summary' | 'quiz' | 'compare' | 'chunks';
+export type WorkspaceTab =
+  | 'dashboard'
+  | 'chat'
+  | 'summary'
+  | 'quiz'
+  | 'compare'
+  | 'chunks';

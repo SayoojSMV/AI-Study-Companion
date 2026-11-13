@@ -5,15 +5,18 @@ import {
   doc,
   getDoc,
   getDocs,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { createStarterWorkspaceForNewStudent } from '../data/seedWorkspace';
+import {
+  buildSeededStudyMetrics,
+  createStarterWorkspaceForNewStudent,
+} from '../data/seedWorkspace';
 import type {
   ChatMessage,
   ComparisonRun,
@@ -23,6 +26,7 @@ import type {
   StudentUser,
   StudentWorkspaceData,
   StudyDocument,
+  StudyMetrics,
 } from '../types';
 import { db, handleFirestoreError, OperationType } from './firebase';
 
@@ -35,63 +39,96 @@ function clampString(val: string, maxLen: number): string {
   return val.length > maxLen ? val.slice(0, maxLen) : val;
 }
 
-export async function ensureStudentProfileInFirestore(
+function toMillis(ts: unknown): number {
+  if (ts instanceof Timestamp) return ts.toMillis();
+  if (ts && typeof ts === 'object' && 'toMillis' in ts && typeof (ts as { toMillis: () => number }).toMillis === 'function') {
+    return (ts as { toMillis: () => number }).toMillis();
+  }
+  return 0;
+}
+
+const inFlightProfileInit = new Map<string, Promise<StudentUser>>();
+
+export function ensureStudentProfileInFirestore(
   firebaseUser: User
 ): Promise<StudentUser> {
   const uid = firebaseUser.uid;
-  const userRef = doc(db, 'users', uid);
-  const path = `users/${uid}`;
+  const existingPromise = inFlightProfileInit.get(uid);
+  if (existingPromise) {
+    return existingPromise;
+  }
 
-  try {
-    const snap = await getDoc(userRef);
-    if (snap.exists()) {
-      const data = snap.data();
-      return {
-        id: uid,
-        name: String(data.name || firebaseUser.displayName || 'Student'),
-        email: String(data.email || firebaseUser.email || ''),
-        program: String(data.program || 'B.Tech AIML · Sem VII'),
-        rollNumber: String(data.rollNumber || `STU-${uid.slice(0, 6).toUpperCase()}`),
-        isDemo: false,
-      };
+  const run = (async (): Promise<StudentUser> => {
+    const userRef = doc(db, 'users', uid);
+    const path = `users/${uid}`;
+
+    let profile: StudentUser | null = null;
+    let needsStarterSeed = false;
+
+    try {
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        profile = {
+          id: uid,
+          name: String(data.name || firebaseUser.displayName || 'Student'),
+          email: String(data.email || firebaseUser.email || ''),
+          program: String(data.program || 'B.Tech AIML · Sem VII'),
+          rollNumber: String(data.rollNumber || `STU-${uid.slice(0, 6).toUpperCase()}`),
+          isDemo: false,
+        };
+      } else {
+        profile = {
+          id: uid,
+          name: clampString(firebaseUser.displayName || 'Student Scholar', 120),
+          email: clampString(firebaseUser.email || '', 254),
+          program: 'B.Tech AIML · Sem VII',
+          rollNumber: `STU-${uid.slice(0, 6).toUpperCase()}`,
+          isDemo: false,
+        };
+
+        await setDoc(userRef, {
+          uid,
+          name: profile.name,
+          email: profile.email,
+          program: profile.program,
+          rollNumber: profile.rollNumber,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        needsStarterSeed = true;
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
     }
 
-    const profile: StudentUser = {
-      id: uid,
-      name: clampString(firebaseUser.displayName || 'Student Scholar', 120),
-      email: clampString(firebaseUser.email || '', 254),
-      program: 'B.Tech AIML · Sem VII',
-      rollNumber: `STU-${uid.slice(0, 6).toUpperCase()}`,
-      isDemo: false,
-    };
-
-    await setDoc(userRef, {
-      uid,
-      name: profile.name,
-      email: profile.email,
-      program: profile.program,
-      rollNumber: profile.rollNumber,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    // Seed starter course material into Firestore on first sign-in
-    const starter = createStarterWorkspaceForNewStudent(uid);
-    for (const starterDoc of starter.documents) {
-      await saveDocumentToFirestore(uid, starterDoc);
+    if (needsStarterSeed) {
+      const starter = createStarterWorkspaceForNewStudent(uid);
+      for (const starterDoc of starter.documents) {
+        const safeDocId = sanitizeId(starterDoc.id);
+        const existingStarter = await getDoc(doc(db, `users/${uid}/documents/${safeDocId}`));
+        if (!existingStarter.exists()) {
+          await saveDocumentToFirestore(uid, starterDoc);
+        }
+      }
     }
 
     return profile;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, path);
-  }
+  })();
+
+  inFlightProfileInit.set(uid, run);
+  run.finally(() => {
+    inFlightProfileInit.delete(uid);
+  });
+
+  return run;
 }
 
 export async function fetchStudentWorkspaceFromFirestore(
   uid: string
 ): Promise<StudentWorkspaceData> {
   const docsPath = `users/${uid}/documents`;
-  const documents: StudyDocument[] = [];
+  const documentsWithTime: Array<{ doc: StudyDocument; createdAtMs: number }> = [];
   const messagesByDoc: Record<string, ChatMessage[]> = {};
   const summariesByDoc: Record<string, RevisionSummary> = {};
   const quizzesByDoc: Record<string, SavedQuiz> = {};
@@ -99,8 +136,7 @@ export async function fetchStudentWorkspaceFromFirestore(
   try {
     const docsQuery = query(
       collection(db, docsPath),
-      where('ownerId', '==', uid),
-      orderBy('createdAt', 'desc')
+      where('ownerId', '==', uid)
     );
     const docsSnap = await getDocs(docsQuery);
 
@@ -108,65 +144,76 @@ export async function fetchStudentWorkspaceFromFirestore(
       const d = docSnap.data();
       const docId = docSnap.id;
 
-      // Load chunks subcollection
+      // Load chunks subcollection and sort in-memory by chunkIndex
       const chunksPath = `users/${uid}/documents/${docId}/chunks`;
       const chunksSnap = await getDocs(
-        query(collection(db, chunksPath), where('ownerId', '==', uid), orderBy('chunkIndex', 'asc'))
+        query(collection(db, chunksPath), where('ownerId', '==', uid))
       );
-      const chunks: DocumentChunk[] = chunksSnap.docs.map((cSnap) => {
-        const c = cSnap.data();
-        return {
-          id: cSnap.id,
-          docId,
-          docTitle: String(c.docTitle || d.title),
-          pageNumber: Number(c.pageNumber || 1),
-          chunkIndex: Number(c.chunkIndex || 1),
-          sectionHeading: c.sectionHeading ? String(c.sectionHeading) : undefined,
-          text: String(c.text || ''),
-          charCount: Number(c.charCount || 0),
-          overlapChars: Number(c.overlapChars || 0),
-          localEmbedding: Array.isArray(c.localEmbedding) ? (c.localEmbedding as number[]) : [],
-          geminiEmbedding: Array.isArray(c.geminiEmbedding)
-            ? (c.geminiEmbedding as number[])
-            : undefined,
-        };
+      const chunks: DocumentChunk[] = chunksSnap.docs
+        .map((cSnap) => {
+          const c = cSnap.data();
+          return {
+            id: cSnap.id,
+            docId,
+            docTitle: String(c.docTitle || d.title),
+            pageNumber: Number(c.pageNumber || 1),
+            chunkIndex: Number(c.chunkIndex || 1),
+            sectionHeading: c.sectionHeading ? String(c.sectionHeading) : undefined,
+            text: String(c.text || ''),
+            charCount: Number(c.charCount || 0),
+            overlapChars: Number(c.overlapChars || 0),
+            localEmbedding: Array.isArray(c.localEmbedding) ? (c.localEmbedding as number[]) : [],
+            geminiEmbedding: Array.isArray(c.geminiEmbedding)
+              ? (c.geminiEmbedding as number[])
+              : undefined,
+          };
+        })
+        .sort((a, b) => a.chunkIndex - b.chunkIndex);
+
+      documentsWithTime.push({
+        createdAtMs: toMillis(d.createdAt),
+        doc: {
+          id: docId,
+          userId: uid,
+          title: String(d.title || 'Untitled Notes'),
+          courseCode: String(d.courseCode || 'COURSE'),
+          fileName: String(d.fileName || 'notes.txt'),
+          uploadedAt: String(d.uploadedAt || 'Today'),
+          pageCount: Number(d.pageCount || 1),
+          totalChars: Number(d.totalChars || 0),
+          embeddingModel: String(d.embeddingModel || 'gemini-embedding-2'),
+          embeddingDimensions: Number(d.embeddingDimensions || 256),
+          chunks,
+        },
       });
 
-      documents.push({
-        id: docId,
-        userId: uid,
-        title: String(d.title || 'Untitled Notes'),
-        courseCode: String(d.courseCode || 'COURSE'),
-        fileName: String(d.fileName || 'notes.txt'),
-        uploadedAt: String(d.uploadedAt || 'Today'),
-        pageCount: Number(d.pageCount || 1),
-        totalChars: Number(d.totalChars || 0),
-        embeddingModel: String(d.embeddingModel || 'gemini-embedding-2'),
-        embeddingDimensions: Number(d.embeddingDimensions || 256),
-        chunks,
-      });
-
-      // Load messages subcollection
+      // Load messages subcollection and sort chronologically
       const msgsPath = `users/${uid}/documents/${docId}/messages`;
       const msgsSnap = await getDocs(
-        query(collection(db, msgsPath), where('ownerId', '==', uid), orderBy('createdAt', 'asc'))
+        query(collection(db, msgsPath), where('ownerId', '==', uid))
       );
-      messagesByDoc[docId] = msgsSnap.docs.map((mSnap) => {
-        const m = mSnap.data();
-        return {
-          id: mSnap.id,
-          role: m.role === 'user' ? 'user' : 'assistant',
-          mode: m.mode === 'clarifier' ? 'clarifier' : 'rag',
-          content: String(m.content || ''),
-          timestamp: String(m.timestampLabel || ''),
-          groundedInNotes:
-            typeof m.groundedInNotes === 'boolean' ? m.groundedInNotes : undefined,
-          primarySource: m.primarySource,
-          provenanceSummary: m.provenanceSummary ? String(m.provenanceSummary) : undefined,
-          citations: Array.isArray(m.citations) ? m.citations : undefined,
-          vectorEngine: m.vectorEngine ? String(m.vectorEngine) : undefined,
-        };
-      });
+      messagesByDoc[docId] = msgsSnap.docs
+        .map((mSnap) => {
+          const m = mSnap.data();
+          return {
+            createdAtMs: toMillis(m.createdAt),
+            msg: {
+              id: mSnap.id,
+              role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+              mode: (m.mode === 'clarifier' ? 'clarifier' : 'rag') as 'rag' | 'clarifier',
+              content: String(m.content || ''),
+              timestamp: String(m.timestampLabel || ''),
+              groundedInNotes:
+                typeof m.groundedInNotes === 'boolean' ? m.groundedInNotes : undefined,
+              primarySource: m.primarySource,
+              provenanceSummary: m.provenanceSummary ? String(m.provenanceSummary) : undefined,
+              citations: Array.isArray(m.citations) ? m.citations : undefined,
+              vectorEngine: m.vectorEngine ? String(m.vectorEngine) : undefined,
+            },
+          };
+        })
+        .sort((a, b) => a.createdAtMs - b.createdAtMs)
+        .map((entry) => entry.msg);
 
       // Load summary subcollection
       const sumPath = `users/${uid}/documents/${docId}/summaries`;
@@ -212,30 +259,66 @@ export async function fetchStudentWorkspaceFromFirestore(
     handleFirestoreError(err, OperationType.LIST, docsPath);
   }
 
+  documentsWithTime.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  const documents = documentsWithTime.map((d) => d.doc);
+
   const comparisonsPath = `users/${uid}/comparisons`;
-  const comparisons: ComparisonRun[] = [];
+  const comparisonsWithTime: Array<{ run: ComparisonRun; createdAtMs: number }> = [];
   try {
     const compSnap = await getDocs(
-      query(collection(db, comparisonsPath), where('ownerId', '==', uid), orderBy('createdAt', 'desc'))
+      query(collection(db, comparisonsPath), where('ownerId', '==', uid))
     );
     for (const cSnap of compSnap.docs) {
       const c = cSnap.data();
-      comparisons.push({
-        id: cSnap.id,
-        docId: String(c.docId || ''),
-        docTitle: String(c.docTitle || ''),
-        question: String(c.question || ''),
-        createdAt: String(c.createdAtLabel || ''),
-        ragAnswer: String(c.ragAnswer || ''),
-        ragGrounded: Boolean(c.ragGrounded),
-        citations: Array.isArray(c.citations) ? c.citations : [],
-        standardAnswer: String(c.standardAnswer || ''),
-        peakSimilarity: Number(c.peakSimilarity || 0),
-        vectorEngine: String(c.vectorEngine || 'gemini-embedding-2'),
+      comparisonsWithTime.push({
+        createdAtMs: toMillis(c.createdAt),
+        run: {
+          id: cSnap.id,
+          docId: String(c.docId || ''),
+          docTitle: String(c.docTitle || ''),
+          question: String(c.question || ''),
+          createdAt: String(c.createdAtLabel || ''),
+          ragAnswer: String(c.ragAnswer || ''),
+          ragGrounded: Boolean(c.ragGrounded),
+          citations: Array.isArray(c.citations) ? c.citations : [],
+          standardAnswer: String(c.standardAnswer || ''),
+          peakSimilarity: Number(c.peakSimilarity || 0),
+          vectorEngine: String(c.vectorEngine || 'gemini-embedding-2'),
+        },
       });
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.LIST, comparisonsPath);
+  }
+
+  comparisonsWithTime.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  const comparisons = comparisonsWithTime.map((c) => c.run);
+
+  // Load private study metrics
+  const metricsPath = `users/${uid}/metrics/study`;
+  let studyMetrics: StudyMetrics = buildSeededStudyMetrics(
+    documents.map((d) => d.id),
+    false
+  );
+  try {
+    const mSnap = await getDoc(doc(db, metricsPath));
+    if (mSnap.exists()) {
+      const m = mSnap.data();
+      studyMetrics = {
+        dailyMinutes: (m.dailyMinutes && typeof m.dailyMinutes === 'object'
+          ? m.dailyMinutes
+          : {}) as Record<string, number>,
+        minutesByDoc: (m.minutesByDoc && typeof m.minutesByDoc === 'object'
+          ? m.minutesByDoc
+          : {}) as Record<string, number>,
+        completedDocIds: Array.isArray(m.completedDocIds)
+          ? (m.completedDocIds as string[])
+          : [],
+        dailyGoalMinutes: Number(m.dailyGoalMinutes || 45),
+      };
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, metricsPath);
   }
 
   return {
@@ -244,6 +327,7 @@ export async function fetchStudentWorkspaceFromFirestore(
     summariesByDoc,
     quizzesByDoc,
     comparisons,
+    studyMetrics,
   };
 }
 
@@ -269,15 +353,19 @@ export async function saveDocumentToFirestore(
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, docPath);
+  }
 
-    // Commit chunks in batches of 200 to stay well under Firestore batch limits
+  const chunksPath = `users/${uid}/documents/${docId}/chunks`;
+  try {
     const chunks = studyDoc.chunks;
     for (let i = 0; i < chunks.length; i += 200) {
       const batch = writeBatch(db);
       const slice = chunks.slice(i, i + 200);
       for (const ch of slice) {
         const chunkId = sanitizeId(ch.id);
-        const chunkRef = doc(db, `users/${uid}/documents/${docId}/chunks/${chunkId}`);
+        const chunkRef = doc(db, `${chunksPath}/${chunkId}`);
         const payload: Record<string, unknown> = {
           ownerId: uid,
           docId,
@@ -301,7 +389,7 @@ export async function saveDocumentToFirestore(
       await batch.commit();
     }
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, docPath);
+    handleFirestoreError(err, OperationType.WRITE, chunksPath);
   }
 }
 
@@ -348,7 +436,6 @@ export async function deleteDocumentFromFirestore(
   const docPath = `users/${uid}/documents/${safeDocId}`;
 
   try {
-    // Delete child subcollections first
     const subcollections = ['chunks', 'messages', 'summaries', 'quizzes'];
     for (const sub of subcollections) {
       const subPath = `${docPath}/${sub}`;
@@ -536,5 +623,37 @@ export async function saveComparisonToFirestore(
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, compPath);
+  }
+}
+
+export async function saveStudyMetricsToFirestore(
+  uid: string,
+  metrics: StudyMetrics
+): Promise<void> {
+  const metricsPath = `users/${uid}/metrics/study`;
+  const cleanPayload = {
+    dailyMinutes: metrics.dailyMinutes,
+    minutesByDoc: metrics.minutesByDoc,
+    completedDocIds: metrics.completedDocIds.slice(0, 200),
+    dailyGoalMinutes: Math.max(10, Math.min(600, Math.round(metrics.dailyGoalMinutes))),
+  };
+
+  try {
+    const existing = await getDoc(doc(db, metricsPath));
+    if (existing.exists()) {
+      await updateDoc(doc(db, metricsPath), {
+        ...cleanPayload,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(doc(db, metricsPath), {
+        ownerId: uid,
+        ...cleanPayload,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, metricsPath);
   }
 }

@@ -436,12 +436,58 @@
         "vectorEngine",
         "createdAt"
       ]
+    },
+    "StudentStudyMetrics": {
+      "title": "StudentStudyMetrics",
+      "description": "Private student study duration logs, daily goal, and completed topic IDs.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "dailyMinutes": {
+          "type": "object"
+        },
+        "minutesByDoc": {
+          "type": "object"
+        },
+        "completedDocIds": {
+          "type": "array"
+        },
+        "dailyGoalMinutes": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "dailyMinutes",
+        "minutesByDoc",
+        "completedDocIds",
+        "dailyGoalMinutes",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/StudentProfile" },
       "description": "Private student profile isolated to the authenticated owner."
+    },
+    "/users/{userId}/metrics/{metricId}": {
+      "schema": { "$ref": "#/entities/StudentStudyMetrics" },
+      "description": "Private study duration logs and completed topic list for the authenticated student."
     },
     "/users/{userId}/documents/{docId}": {
       "schema": { "$ref": "#/entities/StudyDocument" },

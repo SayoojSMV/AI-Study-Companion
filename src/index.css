@@ -28,6 +28,20 @@
   --shadow-surface: 0 1px 2px rgba(28, 25, 23, 0.03);
 }
 
+html.dark {
+  color-scheme: dark;
+  --color-background: #141311;
+  --color-surface: #1C1A17;
+  --color-foreground: #F3F1EC;
+  --color-muted: #A8A29E;
+  --color-border: #2E2A25;
+  --color-primary: #3F8863;
+  --color-primary-foreground: #FAF9F6;
+  --color-accent: #DF7B48;
+  --color-accent-foreground: #141311;
+  --shadow-surface: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
 html {
   font-synthesis-weight: none;
   font-family: var(--font-sans);

@@ -1,18 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   BookOpen,
   FileText,
   Layers,
+  LayoutDashboard,
   ListChecks,
   Loader2,
   LogOut,
   MessageSquareText,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   RotateCcw,
   Scale,
+  Sun,
   Trash2,
 } from 'lucide-react';
 import { AuthView } from './components/AuthView';
@@ -21,9 +24,11 @@ import { ChunksInspectorView } from './components/ChunksInspectorView';
 import { ComparisonView } from './components/ComparisonView';
 import { QuizView } from './components/QuizView';
 import { StudentAvatar } from './components/StudentAvatar';
+import { StudyDashboard } from './components/StudyDashboard';
 import { SummaryView } from './components/SummaryView';
 import { UploadModal } from './components/UploadModal';
 import { Button } from './components/ui';
+import { getLocalDateKey } from './data/seedWorkspace';
 import { generateGeminiEmbeddings } from './lib/apiClient';
 import { auth, googleProvider } from './lib/firebase';
 import {
@@ -35,13 +40,16 @@ import {
   saveComparisonToFirestore,
   saveDocumentToFirestore,
   saveQuizToFirestore,
+  saveStudyMetricsToFirestore,
   saveSummaryToFirestore,
   updateChunkEmbeddingsInFirestore,
 } from './lib/firestoreWorkspace';
 import {
   getCurrentSessionUser,
+  loadThemePreference,
   loadWorkspaceData,
   resetWorkspaceToDefault,
+  saveThemePreference,
   saveWorkspaceData,
   setSessionUser,
 } from './lib/storage';
@@ -54,6 +62,7 @@ import type {
   StudentUser,
   StudentWorkspaceData,
   StudyDocument,
+  StudyMetrics,
   WorkspaceTab,
 } from './types';
 
@@ -66,22 +75,41 @@ export default function App() {
     return u?.isDemo ? loadWorkspaceData(u) : null;
   });
 
-  const [cloudLoading, setCloudLoading] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => loadThemePreference());
+  const [cloudLoading, setCloudLoading] = useState(() => {
+    const u = getCurrentSessionUser();
+    return Boolean(u && !u.isDemo);
+  });
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('chat');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [pendingComparisonQuestion, setPendingComparisonQuestion] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
 
+  const workspaceRef = useRef<StudentWorkspaceData | null>(workspace);
+  workspaceRef.current = workspace;
+  const activeDocIdRef = useRef<string | null>(activeDocId);
+  activeDocIdRef.current = activeDocId;
+
   const isCloudUser = Boolean(user && !user.isDemo);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    saveThemePreference(theme);
+  }, [theme]);
+
+  const handleToggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
 
   // Listen to Firebase Authentication state changes
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (!fbUser) {
+        setCloudLoading(false);
         return;
       }
 
@@ -94,6 +122,7 @@ export default function App() {
         setUser(profile);
         setWorkspace(cloudWorkspace);
         setActiveDocId(cloudWorkspace.documents[0]?.id ?? null);
+        setStatusBanner(`Signed in as ${profile.name} · Synced with Cloud Firestore.`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('Quota exceeded')) {
@@ -101,7 +130,9 @@ export default function App() {
             'Daily Cloud Firestore free-tier quota exceeded. Quota resets tomorrow.'
           );
         } else {
-          setCloudError('Could not load Cloud Firestore workspace. Check your connection and retry.');
+          setCloudError(
+            'Could not load Cloud Firestore workspace. Please refresh or check your permissions.'
+          );
         }
       } finally {
         setCloudLoading(false);
@@ -179,6 +210,46 @@ export default function App() {
     };
   }, [user, workspace?.documents.length]);
 
+  // Track active study minutes automatically while the student's tab is visible
+  useEffect(() => {
+    if (!user) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const currentWs = workspaceRef.current;
+      if (!currentWs) return;
+      const todayKey = getLocalDateKey(0);
+      const docId = activeDocIdRef.current ?? currentWs.documents[0]?.id ?? null;
+      const nextMetrics: StudyMetrics = {
+        ...currentWs.studyMetrics,
+        dailyMinutes: {
+          ...currentWs.studyMetrics.dailyMinutes,
+          [todayKey]: (currentWs.studyMetrics.dailyMinutes[todayKey] ?? 0) + 1,
+        },
+        minutesByDoc: docId
+          ? {
+              ...currentWs.studyMetrics.minutesByDoc,
+              [docId]: (currentWs.studyMetrics.minutesByDoc[docId] ?? 0) + 1,
+            }
+          : currentWs.studyMetrics.minutesByDoc,
+      };
+
+      setWorkspace((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev, studyMetrics: nextMetrics };
+        if (user.isDemo) saveWorkspaceData(user.id, next);
+        return next;
+      });
+
+      if (!user.isDemo) {
+        void saveStudyMetricsToFirestore(user.id, nextMetrics).catch((err) => {
+          setCloudError(err instanceof Error ? err.message : 'Failed to sync study time.');
+        });
+      }
+    }, 60_000);
+
+    return () => window.clearInterval(timer);
+  }, [user?.id, user?.isDemo]);
+
   const handleAuthenticated = async (authedUser: StudentUser) => {
     setUser(authedUser);
     setSessionUser(authedUser);
@@ -186,14 +257,14 @@ export default function App() {
       const ws = loadWorkspaceData(authedUser);
       setWorkspace(ws);
       setActiveDocId(ws.documents[0]?.id ?? null);
-      setActiveTab('chat');
+      setActiveTab('dashboard');
     } else {
       setCloudLoading(true);
       try {
         const cloudWs = await fetchStudentWorkspaceFromFirestore(authedUser.id);
         setWorkspace(cloudWs);
         setActiveDocId(cloudWs.documents[0]?.id ?? null);
-        setActiveTab('chat');
+        setActiveTab('dashboard');
       } finally {
         setCloudLoading(false);
       }
@@ -203,14 +274,7 @@ export default function App() {
   const handleUpgradeDemoToGoogle = async () => {
     setCloudError(null);
     try {
-      const cred = await signInWithPopup(auth, googleProvider);
-      const profile = await ensureStudentProfileInFirestore(cred.user);
-      const cloudWs = await fetchStudentWorkspaceFromFirestore(cred.user.uid);
-      setSessionUser(profile);
-      setUser(profile);
-      setWorkspace(cloudWs);
-      setActiveDocId(cloudWs.documents[0]?.id ?? null);
-      setStatusBanner(`Signed in as ${profile.name} · Synced with Cloud Firestore.`);
+      await signInWithPopup(auth, googleProvider);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('popup-closed-by-user')) {
@@ -241,7 +305,13 @@ export default function App() {
   }
 
   if (!user || !workspace) {
-    return <AuthView onAuthenticated={(u) => void handleAuthenticated(u)} />;
+    return (
+      <AuthView
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        onAuthenticated={(u) => void handleAuthenticated(u)}
+      />
+    );
   }
 
   const updateLocalWorkspace = (
@@ -331,7 +401,58 @@ export default function App() {
     const fresh = resetWorkspaceToDefault(user);
     setWorkspace(fresh);
     setActiveDocId(fresh.documents[0]?.id ?? null);
+    setActiveTab('dashboard');
     setStatusBanner('Restored default course binder and revision records.');
+  };
+
+  const handleToggleTopicComplete = async (docId: string) => {
+    const currentIds = workspace.studyMetrics.completedDocIds;
+    const exists = currentIds.includes(docId);
+    const nextIds = exists
+      ? currentIds.filter((id) => id !== docId)
+      : [...currentIds, docId];
+    const nextMetrics: StudyMetrics = {
+      ...workspace.studyMetrics,
+      completedDocIds: nextIds,
+    };
+
+    updateLocalWorkspace((prev) => ({
+      ...prev,
+      studyMetrics: nextMetrics,
+    }));
+
+    if (isCloudUser) {
+      try {
+        await saveStudyMetricsToFirestore(user.id, nextMetrics);
+      } catch (err) {
+        setCloudError(err instanceof Error ? err.message : 'Failed to update topic completion.');
+      }
+    }
+  };
+
+  const handleChangeDailyGoal = async (minutes: number) => {
+    const nextMetrics: StudyMetrics = {
+      ...workspace.studyMetrics,
+      dailyGoalMinutes: minutes,
+    };
+
+    updateLocalWorkspace((prev) => ({
+      ...prev,
+      studyMetrics: nextMetrics,
+    }));
+
+    if (isCloudUser) {
+      try {
+        await saveStudyMetricsToFirestore(user.id, nextMetrics);
+      } catch (err) {
+        setCloudError(err instanceof Error ? err.message : 'Failed to update daily study goal.');
+      }
+    }
+  };
+
+  const handleOpenDocumentTool = (docId: string, tab: WorkspaceTab) => {
+    setActiveDocId(docId);
+    setActiveTab(tab);
   };
 
   const handleAppendMessages = async (newMsgs: ChatMessage[]) => {
@@ -467,6 +588,7 @@ export default function App() {
     label: string;
     icon: typeof MessageSquareText;
   }> = [
+    { id: 'dashboard', label: 'Study dashboard', icon: LayoutDashboard },
     { id: 'chat', label: 'Doubt-clearing chat', icon: MessageSquareText },
     { id: 'summary', label: 'Revision summary', icon: FileText },
     { id: 'quiz', label: 'Practice quiz (5 Qs)', icon: ListChecks },
@@ -684,12 +806,16 @@ export default function App() {
 
               <div className="min-w-0">
                 <h1 className="text-base sm:text-lg font-editorial font-medium text-foreground truncate">
-                  {activeDoc ? activeDoc.title : 'Student study desk'}
+                  {activeTab === 'dashboard'
+                    ? 'Personal study dashboard'
+                    : activeDoc
+                    ? activeDoc.title
+                    : 'Student study desk'}
                 </h1>
               </div>
             </div>
 
-            {/* Student Profile & Workspace Stats (quiet text joined by middle dots) */}
+            {/* Student Profile, Theme Toggle & Workspace Stats */}
             <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
               <span className="hidden lg:inline tabular-nums">
                 {workspace.documents.length}{' '}
@@ -708,6 +834,25 @@ export default function App() {
                 <span>Upload PDF</span>
               </Button>
 
+              <button
+                type="button"
+                onClick={handleToggleTheme}
+                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                className="inline-flex items-center gap-1.5 min-h-8 px-2.5 py-1 rounded-control border border-border bg-surface text-xs text-foreground hover:border-primary"
+              >
+                {theme === 'dark' ? (
+                  <>
+                    <Sun className="w-3.5 h-3.5 text-accent" />
+                    <span className="hidden sm:inline">Light</span>
+                  </>
+                ) : (
+                  <>
+                    <Moon className="w-3.5 h-3.5 text-primary" />
+                    <span className="hidden sm:inline">Dark</span>
+                  </>
+                )}
+              </button>
+
               {user.isDemo && (
                 <Button
                   tone="primary"
@@ -723,13 +868,6 @@ export default function App() {
                 <span className="text-foreground font-medium hidden sm:inline">
                   {user.name}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => void handleSignOut()}
-                  className="text-xs text-muted hover:text-accent whitespace-nowrap ml-1"
-                >
-                  Switch user
-                </button>
               </div>
             </div>
           </div>
@@ -771,6 +909,17 @@ export default function App() {
 
         {/* Spacious Reading, Doubt-Clearing & Revision Canvas */}
         <main className="flex-1 px-4 sm:px-8 py-6 sm:py-8 max-w-5xl w-full mx-auto">
+          {activeTab === 'dashboard' && (
+            <StudyDashboard
+              user={user}
+              workspace={workspace}
+              onToggleTopicComplete={(docId) => void handleToggleTopicComplete(docId)}
+              onChangeDailyGoal={(mins) => void handleChangeDailyGoal(mins)}
+              onOpenDocumentTool={handleOpenDocumentTool}
+              onOpenUpload={() => setUploadOpen(true)}
+            />
+          )}
+
           {activeTab === 'chat' && (
             <ChatCanvas
               activeDoc={activeDoc}

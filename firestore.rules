@@ -182,6 +182,25 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidStudyMetrics(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'dailyMinutes', 'minutesByDoc', 'completedDocIds',
+          'dailyGoalMinutes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'dailyMinutes', 'minutesByDoc', 'completedDocIds',
+          'dailyGoalMinutes', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId)
+        && data.dailyMinutes is map
+        && data.minutesByDoc is map
+        && data.completedDocIds is list && data.completedDocIds.size() <= 200
+        && (data.completedDocIds.size() == 0 || data.completedDocIds[0] is string)
+        && data.dailyGoalMinutes is int && data.dailyGoalMinutes >= 10 && data.dailyGoalMinutes <= 600
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     function ownsParentDocument(userId, docId) {
       return exists(/databases/$(database)/documents/users/$(userId)/documents/$(docId))
         && get(/databases/$(database)/documents/users/$(userId)/documents/$(docId)).data.ownerId == request.auth.uid;
@@ -201,6 +220,23 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'program', 'rollNumber', 'updatedAt']);
       allow delete: if isVerified() && isOwner(userId) && isValidId(userId);
+
+      // Private Student Study Metrics & Completed Topics
+      match /metrics/{metricId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(metricId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(metricId)
+          && isValidStudyMetrics(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(metricId)
+          && isValidStudyMetrics(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['dailyMinutes', 'minutesByDoc', 'completedDocIds', 'dailyGoalMinutes', 'updatedAt']);
+        allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(metricId);
+      }
 
       // Uploaded Course Documents
       match /documents/{docId} {

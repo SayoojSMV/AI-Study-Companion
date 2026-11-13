@@ -1,17 +1,18 @@
 import { useState } from 'react';
 import { signInWithPopup } from 'firebase/auth';
-import { ArrowRight, BookOpen, Loader2 } from 'lucide-react';
+import { ArrowRight, BookOpen, Loader2, Moon, Sun } from 'lucide-react';
 import { auth, googleProvider } from '../lib/firebase';
-import { ensureStudentProfileInFirestore } from '../lib/firestoreWorkspace';
 import { continueAsDemoStudent } from '../lib/storage';
 import type { StudentUser } from '../types';
 import { Button, Surface } from './ui';
 
 interface AuthViewProps {
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
   onAuthenticated: (user: StudentUser) => void;
 }
 
-export function AuthView({ onAuthenticated }: AuthViewProps) {
+export function AuthView({ theme, onToggleTheme, onAuthenticated }: AuthViewProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -21,13 +22,20 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
     setError('');
 
     try {
-      const cred = await signInWithPopup(auth, googleProvider);
-      const profile = await ensureStudentProfileInFirestore(cred.user);
-      onAuthenticated(profile);
+      await signInWithPopup(auth, googleProvider);
+      // App.tsx's onAuthStateChanged listener hydrates profile & Firestore workspace
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('popup-closed-by-user')) {
         setError('Google sign-in popup was closed before completion. Try again when ready.');
+      } else if (msg.includes('auth/unauthorized-domain')) {
+        setError(
+          `Domain "${window.location.hostname}" is not listed in Firebase Console → Authentication → Settings → Authorized domains. Add "${window.location.hostname}" (or open via http://localhost:3000 instead of 127.0.0.1).`
+        );
+      } else if (msg.includes('auth/popup-blocked')) {
+        setError(
+          'Your browser blocked the Google sign-in popup. Allow popups for this site and retry.'
+        );
       } else if (msg.includes('Quota exceeded')) {
         setError(
           'Daily Cloud Firestore free-tier quota exceeded. Quota resets tomorrow, or continue as Demo Student for local preview.'
@@ -35,7 +43,6 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
       } else {
         setError(msg || 'Unable to sign in with Google. Please try again.');
       }
-    } finally {
       setBusy(false);
     }
   };
@@ -55,9 +62,29 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
               AI Study Companion
             </span>
           </div>
-          <p className="text-xs text-muted">
-            Center for Artificial Intelligence &amp; Machine Learning · Course RAG Workbench
-          </p>
+          <div className="flex items-center gap-4">
+            <p className="text-xs text-muted hidden sm:block">
+              Center for Artificial Intelligence &amp; Machine Learning · Course RAG Workbench
+            </p>
+            <button
+              type="button"
+              onClick={onToggleTheme}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-control border border-border bg-surface text-xs text-foreground hover:border-primary"
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Sun className="w-3.5 h-3.5 text-accent" />
+                  <span>Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-3.5 h-3.5 text-primary" />
+                  <span>Dark</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -72,8 +99,8 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
           </h1>
           <p className="text-base text-muted leading-relaxed max-w-[58ch]">
             Generic chatbots extrapolate from broad internet training data and miss course-specific
-            definitions. Sign in to persist your syllabus PDFs, overlapping semantic chunks, cited
-            Q&amp;A threads, revision sheets, and quizzes in Cloud Firestore across devices.
+            definitions. Sign in to keep your syllabus PDFs, overlapping semantic chunks, cited
+            Q&amp;A threads, study dashboard, and quizzes private in Cloud Firestore.
           </p>
 
           {/* Self-contained SVG RAG Architecture Figure */}
@@ -84,28 +111,28 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
               role="img"
               aria-label="Four-stage Retrieval-Augmented Generation pipeline from PDF upload to grounded citation"
             >
-              <g stroke="#E5E2DC" strokeWidth="1.5" fill="none">
+              <g stroke="var(--color-border)" strokeWidth="1.5" fill="none">
                 <line x1="152" y1="64" x2="184" y2="64" />
-                <polyline points="178,59 184,64 178,69" stroke="#1B4332" />
+                <polyline points="178,59 184,64 178,69" stroke="var(--color-primary)" />
                 <line x1="324" y1="64" x2="356" y2="64" />
-                <polyline points="350,59 356,64 350,69" stroke="#1B4332" />
+                <polyline points="350,59 356,64 350,69" stroke="var(--color-primary)" />
                 <line x1="496" y1="64" x2="528" y2="64" />
-                <polyline points="522,59 528,64 522,69" stroke="#1B4332" />
+                <polyline points="522,59 528,64 522,69" stroke="var(--color-primary)" />
               </g>
 
-              <g fill="#FAF9F6" stroke="#E5E2DC" strokeWidth="1">
+              <g fill="var(--color-background)" stroke="var(--color-border)" strokeWidth="1">
                 <rect x="16" y="26" width="136" height="76" rx="4" />
                 <rect x="188" y="26" width="136" height="76" rx="4" />
                 <rect x="360" y="26" width="136" height="76" rx="4" />
-                <rect x="532" y="26" width="132" height="76" rx="4" stroke="#1B4332" />
+                <rect x="532" y="26" width="132" height="76" rx="4" stroke="var(--color-primary)" />
               </g>
 
               <g
                 fontFamily="Plus Jakarta Sans, sans-serif"
-                fill="#1C1917"
+                fill="var(--color-foreground)"
                 style={{
                   paintOrder: 'stroke',
-                  stroke: '#FAF9F6',
+                  stroke: 'var(--color-background)',
                   strokeWidth: '3px',
                   strokeLinejoin: 'round',
                 }}
@@ -113,47 +140,47 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
                 <text x="28" y="52" fontSize="12" fontWeight="600">
                   1. PDF parse
                 </text>
-                <text x="28" y="72" fontSize="11" fill="#57534E">
+                <text x="28" y="72" fontSize="11" fill="var(--color-muted)">
                   Page-aware text
                 </text>
-                <text x="28" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="#57534E">
+                <text x="28" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="var(--color-muted)">
                   pdf.js client
                 </text>
 
                 <text x="200" y="52" fontSize="12" fontWeight="600">
                   2. Chunking
                 </text>
-                <text x="200" y="72" fontSize="11" fill="#57534E">
-                  Firestore chunks
+                <text x="200" y="72" fontSize="11" fill="var(--color-muted)">
+                  Private chunks
                 </text>
-                <text x="200" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="#57534E">
+                <text x="200" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="var(--color-muted)">
                   660c · 125c
                 </text>
 
                 <text x="372" y="52" fontSize="12" fontWeight="600">
                   3. Vector index
                 </text>
-                <text x="372" y="72" fontSize="11" fill="#57534E">
+                <text x="372" y="72" fontSize="11" fill="var(--color-muted)">
                   Cosine search
                 </text>
-                <text x="372" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="#57534E">
+                <text x="372" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="var(--color-muted)">
                   cos(u, v)
                 </text>
 
-                <text x="544" y="52" fontSize="12" fontWeight="600" fill="#1B4332">
+                <text x="544" y="52" fontSize="12" fontWeight="600" fill="var(--color-primary)">
                   4. Cited answer
                 </text>
-                <text x="544" y="72" fontSize="11" fill="#57534E">
+                <text x="544" y="72" fontSize="11" fill="var(--color-muted)">
                   Page &amp; passage
                 </text>
-                <text x="544" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="#1B4332">
+                <text x="544" y="88" fontSize="10" fontFamily="JetBrains Mono, monospace" fill="var(--color-primary)">
                   [p. 4, #07]
                 </text>
               </g>
             </svg>
             <p className="text-xs text-muted">
-              Cloud persistence: uploaded documents, embeddings, chat threads, summaries, and
-              quizzes are isolated per verified student account in Firestore.
+              Privacy guarantee: uploaded PDFs, embeddings, chat threads, and study metrics are
+              strictly isolated to your verified student UID in Firestore.
             </p>
           </div>
         </section>
@@ -167,8 +194,8 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
                   Student workspace sign-in
                 </h2>
                 <p className="text-xs text-muted leading-relaxed">
-                  Sign in with your Google account to sync your course binder, vector chunks,
-                  and quiz progress to Cloud Firestore.
+                  Sign in with your Google account to sync your private course binder, study
+                  time metrics, and quiz progress to Cloud Firestore.
                 </p>
               </div>
 
@@ -206,7 +233,7 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
                 </p>
                 <p className="text-xs text-muted leading-relaxed">
                   Open Ananya Rao&apos;s pre-indexed CS-402 study desk locally with Lecture 07
-                  &amp; Lecture 11 notes, revision sheet, and 5-question quiz.
+                  &amp; Lecture 11 notes, study dashboard, revision sheet, and 5-question quiz.
                 </p>
               </div>
               <Button
@@ -227,7 +254,7 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
       <footer className="border-t border-border py-4 px-6 text-xs text-muted">
         <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-2">
           <span>AI Study Companion · Grounded Course Revision</span>
-          <span>Firebase Auth · Cloud Firestore · Cosine RAG Pipeline</span>
+          <span>Firebase Auth · Private Cloud Firestore · Cosine RAG</span>
         </div>
       </footer>
     </div>
