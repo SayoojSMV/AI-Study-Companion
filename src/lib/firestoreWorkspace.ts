@@ -28,7 +28,16 @@ import type {
   StudyDocument,
   StudyMetrics,
 } from '../types';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { db as rawDb, handleFirestoreError, OperationType } from './firebase';
+
+function requireDb() {
+  if (!rawDb) {
+    throw new Error(
+      'Firebase Firestore is not configured. Add VITE_FIREBASE_* environment variables to enable cloud sync.'
+    );
+  }
+  return rawDb;
+}
 
 function sanitizeId(raw: string): string {
   const cleaned = raw.replace(/[^a-zA-Z0-9_\-]+/g, '-').slice(0, 120);
@@ -59,7 +68,7 @@ export function ensureStudentProfileInFirestore(
   }
 
   const run = (async (): Promise<StudentUser> => {
-    const userRef = doc(db, 'users', uid);
+    const userRef = doc(requireDb(), 'users', uid);
     const path = `users/${uid}`;
 
     let profile: StudentUser | null = null;
@@ -106,7 +115,7 @@ export function ensureStudentProfileInFirestore(
       const starter = createStarterWorkspaceForNewStudent(uid);
       for (const starterDoc of starter.documents) {
         const safeDocId = sanitizeId(starterDoc.id);
-        const existingStarter = await getDoc(doc(db, `users/${uid}/documents/${safeDocId}`));
+        const existingStarter = await getDoc(doc(requireDb(), `users/${uid}/documents/${safeDocId}`));
         if (!existingStarter.exists()) {
           await saveDocumentToFirestore(uid, starterDoc);
         }
@@ -135,7 +144,7 @@ export async function fetchStudentWorkspaceFromFirestore(
 
   try {
     const docsQuery = query(
-      collection(db, docsPath),
+      collection(requireDb(), docsPath),
       where('ownerId', '==', uid)
     );
     const docsSnap = await getDocs(docsQuery);
@@ -147,7 +156,7 @@ export async function fetchStudentWorkspaceFromFirestore(
       // Load chunks subcollection and sort in-memory by chunkIndex
       const chunksPath = `users/${uid}/documents/${docId}/chunks`;
       const chunksSnap = await getDocs(
-        query(collection(db, chunksPath), where('ownerId', '==', uid))
+        query(collection(requireDb(), chunksPath), where('ownerId', '==', uid))
       );
       const chunks: DocumentChunk[] = chunksSnap.docs
         .map((cSnap) => {
@@ -190,7 +199,7 @@ export async function fetchStudentWorkspaceFromFirestore(
       // Load messages subcollection and sort chronologically
       const msgsPath = `users/${uid}/documents/${docId}/messages`;
       const msgsSnap = await getDocs(
-        query(collection(db, msgsPath), where('ownerId', '==', uid))
+        query(collection(requireDb(), msgsPath), where('ownerId', '==', uid))
       );
       messagesByDoc[docId] = msgsSnap.docs
         .map((mSnap) => {
@@ -217,7 +226,7 @@ export async function fetchStudentWorkspaceFromFirestore(
 
       // Load summary subcollection
       const sumPath = `users/${uid}/documents/${docId}/summaries`;
-      const sumSnap = await getDocs(query(collection(db, sumPath), where('ownerId', '==', uid)));
+      const sumSnap = await getDocs(query(collection(requireDb(), sumPath), where('ownerId', '==', uid)));
       if (!sumSnap.empty) {
         const sDoc = sumSnap.docs[0];
         const s = sDoc.data();
@@ -235,7 +244,7 @@ export async function fetchStudentWorkspaceFromFirestore(
 
       // Load quiz subcollection
       const quizPath = `users/${uid}/documents/${docId}/quizzes`;
-      const quizSnap = await getDocs(query(collection(db, quizPath), where('ownerId', '==', uid)));
+      const quizSnap = await getDocs(query(collection(requireDb(), quizPath), where('ownerId', '==', uid)));
       if (!quizSnap.empty) {
         const qDoc = quizSnap.docs[0];
         const q = qDoc.data();
@@ -266,7 +275,7 @@ export async function fetchStudentWorkspaceFromFirestore(
   const comparisonsWithTime: Array<{ run: ComparisonRun; createdAtMs: number }> = [];
   try {
     const compSnap = await getDocs(
-      query(collection(db, comparisonsPath), where('ownerId', '==', uid))
+      query(collection(requireDb(), comparisonsPath), where('ownerId', '==', uid))
     );
     for (const cSnap of compSnap.docs) {
       const c = cSnap.data();
@@ -301,7 +310,7 @@ export async function fetchStudentWorkspaceFromFirestore(
     false
   );
   try {
-    const mSnap = await getDoc(doc(db, metricsPath));
+    const mSnap = await getDoc(doc(requireDb(), metricsPath));
     if (mSnap.exists()) {
       const m = mSnap.data();
       studyMetrics = {
@@ -339,7 +348,7 @@ export async function saveDocumentToFirestore(
   const docPath = `users/${uid}/documents/${docId}`;
 
   try {
-    await setDoc(doc(db, docPath), {
+    await setDoc(doc(requireDb(), docPath), {
       ownerId: uid,
       title: clampString(studyDoc.title, 200),
       courseCode: clampString(studyDoc.courseCode, 32),
@@ -361,11 +370,11 @@ export async function saveDocumentToFirestore(
   try {
     const chunks = studyDoc.chunks;
     for (let i = 0; i < chunks.length; i += 200) {
-      const batch = writeBatch(db);
+      const batch = writeBatch(requireDb());
       const slice = chunks.slice(i, i + 200);
       for (const ch of slice) {
         const chunkId = sanitizeId(ch.id);
-        const chunkRef = doc(db, `${chunksPath}/${chunkId}`);
+        const chunkRef = doc(requireDb(), `${chunksPath}/${chunkId}`);
         const payload: Record<string, unknown> = {
           ownerId: uid,
           docId,
@@ -404,19 +413,19 @@ export async function updateChunkEmbeddingsInFirestore(
   const docPath = `users/${uid}/documents/${safeDocId}`;
 
   try {
-    await updateDoc(doc(db, docPath), {
+    await updateDoc(doc(requireDb(), docPath), {
       embeddingModel: clampString(model, 80),
       embeddingDimensions: Math.max(1, Math.round(dimensions)),
       updatedAt: serverTimestamp(),
     });
 
     for (let i = 0; i < chunks.length; i += 200) {
-      const batch = writeBatch(db);
+      const batch = writeBatch(requireDb());
       const slice = chunks.slice(i, i + 200);
       for (const ch of slice) {
         if (!ch.geminiEmbedding || ch.geminiEmbedding.length === 0) continue;
         const chunkId = sanitizeId(ch.id);
-        const chunkRef = doc(db, `users/${uid}/documents/${safeDocId}/chunks/${chunkId}`);
+        const chunkRef = doc(requireDb(), `users/${uid}/documents/${safeDocId}/chunks/${chunkId}`);
         batch.update(chunkRef, {
           geminiEmbedding: ch.geminiEmbedding.slice(0, 3072),
         });
@@ -439,15 +448,15 @@ export async function deleteDocumentFromFirestore(
     const subcollections = ['chunks', 'messages', 'summaries', 'quizzes'];
     for (const sub of subcollections) {
       const subPath = `${docPath}/${sub}`;
-      const snap = await getDocs(query(collection(db, subPath), where('ownerId', '==', uid)));
+      const snap = await getDocs(query(collection(requireDb(), subPath), where('ownerId', '==', uid)));
       for (let i = 0; i < snap.docs.length; i += 300) {
-        const batch = writeBatch(db);
+        const batch = writeBatch(requireDb());
         snap.docs.slice(i, i + 300).forEach((d) => batch.delete(d.ref));
         await batch.commit();
       }
     }
 
-    await deleteDoc(doc(db, docPath));
+    await deleteDoc(doc(requireDb(), docPath));
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, docPath);
   }
@@ -462,10 +471,10 @@ export async function appendMessagesToFirestore(
   const basePath = `users/${uid}/documents/${safeDocId}/messages`;
 
   try {
-    const batch = writeBatch(db);
+    const batch = writeBatch(requireDb());
     for (const msg of messages) {
       const msgId = sanitizeId(msg.id);
-      const msgRef = doc(db, `${basePath}/${msgId}`);
+      const msgRef = doc(requireDb(), `${basePath}/${msgId}`);
       const payload: Record<string, unknown> = {
         ownerId: uid,
         docId: safeDocId,
@@ -505,8 +514,8 @@ export async function clearMessagesInFirestore(
   const safeDocId = sanitizeId(docId);
   const basePath = `users/${uid}/documents/${safeDocId}/messages`;
   try {
-    const snap = await getDocs(query(collection(db, basePath), where('ownerId', '==', uid)));
-    const batch = writeBatch(db);
+    const snap = await getDocs(query(collection(requireDb(), basePath), where('ownerId', '==', uid)));
+    const batch = writeBatch(requireDb());
     snap.docs.forEach((d) => batch.delete(d.ref));
     await batch.commit();
   } catch (err) {
@@ -523,9 +532,9 @@ export async function saveSummaryToFirestore(
   const sumPath = `users/${uid}/documents/${safeDocId}/summaries/${summaryId}`;
 
   try {
-    const existing = await getDoc(doc(db, sumPath));
+    const existing = await getDoc(doc(requireDb(), sumPath));
     if (existing.exists()) {
-      await updateDoc(doc(db, sumPath), {
+      await updateDoc(doc(requireDb(), sumPath), {
         createdAtLabel: clampString(summary.createdAt, 64),
         overview: clampString(summary.overview, 4000),
         keyPoints: summary.keyPoints.slice(0, 30),
@@ -534,7 +543,7 @@ export async function saveSummaryToFirestore(
         updatedAt: serverTimestamp(),
       });
     } else {
-      await setDoc(doc(db, sumPath), {
+      await setDoc(doc(requireDb(), sumPath), {
         ownerId: uid,
         docId: safeDocId,
         docTitle: clampString(summary.docTitle, 200),
@@ -566,7 +575,7 @@ export async function saveQuizToFirestore(
   }
 
   try {
-    const existing = await getDoc(doc(db, quizPath));
+    const existing = await getDoc(doc(requireDb(), quizPath));
     if (existing.exists()) {
       const updatePayload: Record<string, unknown> = {
         createdAtLabel: clampString(quiz.createdAt, 64),
@@ -577,7 +586,7 @@ export async function saveQuizToFirestore(
       if (typeof quiz.bestScore === 'number') {
         updatePayload.bestScore = Math.max(0, Math.min(100, quiz.bestScore));
       }
-      await updateDoc(doc(db, quizPath), updatePayload);
+      await updateDoc(doc(requireDb(), quizPath), updatePayload);
     } else {
       const createPayload: Record<string, unknown> = {
         ownerId: uid,
@@ -592,7 +601,7 @@ export async function saveQuizToFirestore(
       if (typeof quiz.bestScore === 'number') {
         createPayload.bestScore = Math.max(0, Math.min(100, quiz.bestScore));
       }
-      await setDoc(doc(db, quizPath), createPayload);
+      await setDoc(doc(requireDb(), quizPath), createPayload);
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, quizPath);
@@ -607,7 +616,7 @@ export async function saveComparisonToFirestore(
   const compPath = `users/${uid}/comparisons/${compId}`;
 
   try {
-    await setDoc(doc(db, compPath), {
+    await setDoc(doc(requireDb(), compPath), {
       ownerId: uid,
       docId: sanitizeId(run.docId),
       docTitle: clampString(run.docTitle, 200),
@@ -639,14 +648,14 @@ export async function saveStudyMetricsToFirestore(
   };
 
   try {
-    const existing = await getDoc(doc(db, metricsPath));
+    const existing = await getDoc(doc(requireDb(), metricsPath));
     if (existing.exists()) {
-      await updateDoc(doc(db, metricsPath), {
+      await updateDoc(doc(requireDb(), metricsPath), {
         ...cleanPayload,
         updatedAt: serverTimestamp(),
       });
     } else {
-      await setDoc(doc(db, metricsPath), {
+      await setDoc(doc(requireDb(), metricsPath), {
         ownerId: uid,
         ...cleanPayload,
         createdAt: serverTimestamp(),

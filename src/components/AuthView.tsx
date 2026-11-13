@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { signInWithPopup } from 'firebase/auth';
 import { ArrowRight, BookOpen, Loader2, Moon, Sun } from 'lucide-react';
-import { auth, googleProvider } from '../lib/firebase';
+import { auth, googleProvider, isFirebaseConfigured } from '../lib/firebase';
 import { continueAsDemoStudent } from '../lib/storage';
 import type { StudentUser } from '../types';
 import { Button, Surface } from './ui';
@@ -18,6 +18,12 @@ export function AuthView({ theme, onToggleTheme, onAuthenticated }: AuthViewProp
 
   const handleGoogleSignIn = async () => {
     if (busy) return;
+    if (!isFirebaseConfigured || !auth) {
+      setError(
+        'Firebase is not configured in this environment. Set VITE_FIREBASE_* environment variables (or add firebase-applet-config.json locally), or click "Continue as Demo Student" below.'
+      );
+      return;
+    }
     setBusy(true);
     setError('');
 

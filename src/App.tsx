@@ -30,7 +30,7 @@ import { UploadModal } from './components/UploadModal';
 import { Button } from './components/ui';
 import { getLocalDateKey } from './data/seedWorkspace';
 import { generateGeminiEmbeddings } from './lib/apiClient';
-import { auth, googleProvider } from './lib/firebase';
+import { auth, googleProvider, isFirebaseConfigured } from './lib/firebase';
 import {
   appendMessagesToFirestore,
   clearMessagesInFirestore,
@@ -78,7 +78,7 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => loadThemePreference());
   const [cloudLoading, setCloudLoading] = useState(() => {
     const u = getCurrentSessionUser();
-    return Boolean(u && !u.isDemo);
+    return Boolean(u && !u.isDemo && isFirebaseConfigured);
   });
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
@@ -107,6 +107,10 @@ export default function App() {
 
   // Listen to Firebase Authentication state changes
   useEffect(() => {
+    if (!auth) {
+      setCloudLoading(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (!fbUser) {
         setCloudLoading(false);
@@ -273,6 +277,12 @@ export default function App() {
 
   const handleUpgradeDemoToGoogle = async () => {
     setCloudError(null);
+    if (!isFirebaseConfigured || !auth) {
+      setCloudError(
+        'Firebase is not configured in this deployment. Add VITE_FIREBASE_* environment variables in Vercel or .env to enable Google Sign-In.'
+      );
+      return;
+    }
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (err) {
@@ -284,7 +294,7 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    if (auth.currentUser) {
+    if (auth?.currentUser) {
       await signOut(auth);
     }
     setSessionUser(null);
