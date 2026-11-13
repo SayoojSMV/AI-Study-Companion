@@ -1,0 +1,306 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Reusable Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Entity Validation Helpers (Anti-Update-Gap)
+    function isValidStudentProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'program', 'rollNumber', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'name', 'email', 'program', 'rollNumber', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.program is string && data.program.size() >= 1 && data.program.size() <= 120
+        && data.rollNumber is string && data.rollNumber.size() >= 1 && data.rollNumber.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudyDocument(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'title', 'courseCode', 'fileName', 'uploadedAt',
+          'pageCount', 'totalChars', 'chunkCount', 'embeddingModel',
+          'embeddingDimensions', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'title', 'courseCode', 'fileName', 'uploadedAt',
+          'pageCount', 'totalChars', 'chunkCount', 'embeddingModel',
+          'embeddingDimensions', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.courseCode is string && data.courseCode.size() >= 1 && data.courseCode.size() <= 32
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 240
+        && data.uploadedAt is string && data.uploadedAt.size() >= 1 && data.uploadedAt.size() <= 64
+        && data.pageCount is int && data.pageCount >= 1 && data.pageCount <= 2000
+        && data.totalChars is int && data.totalChars >= 1 && data.totalChars <= 5000000
+        && data.chunkCount is int && data.chunkCount >= 1 && data.chunkCount <= 5000
+        && data.embeddingModel is string && data.embeddingModel.size() >= 1 && data.embeddingModel.size() <= 80
+        && data.embeddingDimensions is int && data.embeddingDimensions >= 1 && data.embeddingDimensions <= 4096
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDocumentChunk(data, userId, docId) {
+      return data.keys().hasAll([
+          'ownerId', 'docId', 'docTitle', 'pageNumber', 'chunkIndex',
+          'text', 'charCount', 'overlapChars', 'localEmbedding', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'docId', 'docTitle', 'pageNumber', 'chunkIndex',
+          'sectionHeading', 'text', 'charCount', 'overlapChars',
+          'localEmbedding', 'geminiEmbedding', 'createdAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId)
+        && data.docId is string && data.docId == docId && isValidId(data.docId)
+        && data.docTitle is string && data.docTitle.size() >= 1 && data.docTitle.size() <= 200
+        && data.pageNumber is int && data.pageNumber >= 1 && data.pageNumber <= 2000
+        && data.chunkIndex is int && data.chunkIndex >= 1 && data.chunkIndex <= 5000
+        && (!data.keys().hasAny(['sectionHeading']) || (data.sectionHeading is string && data.sectionHeading.size() <= 200))
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 4000
+        && data.charCount is int && data.charCount >= 1 && data.charCount <= 4000
+        && data.overlapChars is int && data.overlapChars >= 0 && data.overlapChars <= 1000
+        && data.localEmbedding is list && data.localEmbedding.size() >= 1 && data.localEmbedding.size() <= 512 && data.localEmbedding[0] is number
+        && (!data.keys().hasAny(['geminiEmbedding']) || (data.geminiEmbedding is list && data.geminiEmbedding.size() >= 1 && data.geminiEmbedding.size() <= 3072 && data.geminiEmbedding[0] is number))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidChatMessage(data, userId, docId) {
+      return data.keys().hasAll(['ownerId', 'docId', 'role', 'mode', 'content', 'timestampLabel', 'createdAt'])
+        && data.keys().hasOnly([
+          'ownerId', 'docId', 'role', 'mode', 'content', 'timestampLabel',
+          'groundedInNotes', 'primarySource', 'provenanceSummary', 'citations',
+          'vectorEngine', 'createdAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId)
+        && data.docId is string && data.docId == docId && isValidId(data.docId)
+        && data.role in ['user', 'assistant']
+        && data.mode in ['rag', 'clarifier']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 12000
+        && data.timestampLabel is string && data.timestampLabel.size() >= 1 && data.timestampLabel.size() <= 32
+        && (!data.keys().hasAny(['groundedInNotes']) || data.groundedInNotes is bool)
+        && (!data.keys().hasAny(['primarySource']) || data.primarySource in ['uploaded_notes', 'general_knowledge', 'not_in_notes'])
+        && (!data.keys().hasAny(['provenanceSummary']) || (data.provenanceSummary is string && data.provenanceSummary.size() <= 500))
+        && (!data.keys().hasAny(['citations']) || (data.citations is list && data.citations.size() <= 8 && (data.citations.size() == 0 || data.citations[0] is map)))
+        && (!data.keys().hasAny(['vectorEngine']) || (data.vectorEngine is string && data.vectorEngine.size() <= 64))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidRevisionSummary(data, userId, docId) {
+      return data.keys().hasAll([
+          'ownerId', 'docId', 'docTitle', 'createdAtLabel', 'overview',
+          'keyPoints', 'formulas', 'definitions', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'docId', 'docTitle', 'createdAtLabel', 'overview',
+          'keyPoints', 'formulas', 'definitions', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId)
+        && data.docId is string && data.docId == docId && isValidId(data.docId)
+        && data.docTitle is string && data.docTitle.size() >= 1 && data.docTitle.size() <= 200
+        && data.createdAtLabel is string && data.createdAtLabel.size() >= 1 && data.createdAtLabel.size() <= 64
+        && data.overview is string && data.overview.size() >= 1 && data.overview.size() <= 4000
+        && data.keyPoints is list && data.keyPoints.size() <= 30 && (data.keyPoints.size() == 0 || data.keyPoints[0] is map)
+        && data.formulas is list && data.formulas.size() <= 20 && (data.formulas.size() == 0 || data.formulas[0] is map)
+        && data.definitions is list && data.definitions.size() <= 30 && (data.definitions.size() == 0 || data.definitions[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSavedQuiz(data, userId, docId) {
+      return data.keys().hasAll([
+          'ownerId', 'docId', 'docTitle', 'createdAtLabel',
+          'questions', 'selectedAnswers', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'docId', 'docTitle', 'createdAtLabel',
+          'questions', 'selectedAnswers', 'bestScore', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId)
+        && data.docId is string && data.docId == docId && isValidId(data.docId)
+        && data.docTitle is string && data.docTitle.size() >= 1 && data.docTitle.size() <= 200
+        && data.createdAtLabel is string && data.createdAtLabel.size() >= 1 && data.createdAtLabel.size() <= 64
+        && data.questions is list && data.questions.size() >= 1 && data.questions.size() <= 10 && data.questions[0] is map
+        && data.selectedAnswers is map
+        && (!data.keys().hasAny(['bestScore']) || (data.bestScore is number && data.bestScore >= 0 && data.bestScore <= 100))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidComparisonRun(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'docId', 'docTitle', 'question', 'createdAtLabel',
+          'ragAnswer', 'ragGrounded', 'citations', 'standardAnswer',
+          'peakSimilarity', 'vectorEngine', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'docId', 'docTitle', 'question', 'createdAtLabel',
+          'ragAnswer', 'ragGrounded', 'citations', 'standardAnswer',
+          'peakSimilarity', 'vectorEngine', 'createdAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId)
+        && data.docId is string && isValidId(data.docId)
+        && data.docTitle is string && data.docTitle.size() >= 1 && data.docTitle.size() <= 200
+        && data.question is string && data.question.size() >= 1 && data.question.size() <= 2000
+        && data.createdAtLabel is string && data.createdAtLabel.size() >= 1 && data.createdAtLabel.size() <= 64
+        && data.ragAnswer is string && data.ragAnswer.size() >= 1 && data.ragAnswer.size() <= 12000
+        && data.ragGrounded is bool
+        && data.citations is list && data.citations.size() <= 8 && (data.citations.size() == 0 || data.citations[0] is map)
+        && data.standardAnswer is string && data.standardAnswer.size() >= 1 && data.standardAnswer.size() <= 12000
+        && data.peakSimilarity is number && data.peakSimilarity >= -1 && data.peakSimilarity <= 1
+        && data.vectorEngine is string && data.vectorEngine.size() >= 1 && data.vectorEngine.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    function ownsParentDocument(userId, docId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/documents/$(docId))
+        && get(/databases/$(database)/documents/users/$(userId)/documents/$(docId)).data.ownerId == request.auth.uid;
+    }
+
+    // Student Profile (Private PII strictly isolated to verified owner)
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isVerified() && isOwner(userId) && isValidId(userId)
+        && isValidStudentProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified() && isOwner(userId) && isValidId(userId)
+        && isValidStudentProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'program', 'rollNumber', 'updatedAt']);
+      allow delete: if isVerified() && isOwner(userId) && isValidId(userId);
+
+      // Uploaded Course Documents
+      match /documents/{docId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(docId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId)
+          && isValidStudyDocument(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId)
+          && isValidStudyDocument(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['embeddingModel', 'embeddingDimensions', 'updatedAt']);
+        allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId);
+
+        // Overlapping Semantic Chunks
+        match /chunks/{chunkId} {
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(chunkId)
+            && ownsParentDocument(userId, docId);
+          allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+          allow create: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(chunkId)
+            && isValidDocumentChunk(incoming(), userId, docId)
+            && incoming().createdAt == request.time
+            && ownsParentDocument(userId, docId);
+          allow update: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(chunkId)
+            && isValidDocumentChunk(incoming(), userId, docId)
+            && incoming().ownerId == existing().ownerId
+            && incoming().docId == existing().docId
+            && incoming().createdAt == existing().createdAt
+            && incoming().diff(existing()).affectedKeys().hasOnly(['geminiEmbedding'])
+            && ownsParentDocument(userId, docId);
+          allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(chunkId);
+        }
+
+        // Document Doubt-Clearing Chat History
+        match /messages/{messageId} {
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(messageId)
+            && ownsParentDocument(userId, docId);
+          allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+          allow create: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(messageId)
+            && isValidChatMessage(incoming(), userId, docId)
+            && incoming().createdAt == request.time
+            && ownsParentDocument(userId, docId);
+          allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(messageId);
+        }
+
+        // Automated Revision Summaries
+        match /summaries/{summaryId} {
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(summaryId)
+            && ownsParentDocument(userId, docId);
+          allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+          allow create: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(summaryId)
+            && isValidRevisionSummary(incoming(), userId, docId)
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time
+            && ownsParentDocument(userId, docId);
+          allow update: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(summaryId)
+            && isValidRevisionSummary(incoming(), userId, docId)
+            && incoming().ownerId == existing().ownerId
+            && incoming().docId == existing().docId
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['createdAtLabel', 'overview', 'keyPoints', 'formulas', 'definitions', 'updatedAt'])
+            && ownsParentDocument(userId, docId);
+          allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(summaryId);
+        }
+
+        // Practice Quizzes
+        match /quizzes/{quizId} {
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(quizId)
+            && ownsParentDocument(userId, docId);
+          allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+          allow create: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(quizId)
+            && isValidSavedQuiz(incoming(), userId, docId)
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time
+            && ownsParentDocument(userId, docId);
+          allow update: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(quizId)
+            && isValidSavedQuiz(incoming(), userId, docId)
+            && incoming().ownerId == existing().ownerId
+            && incoming().docId == existing().docId
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['createdAtLabel', 'questions', 'selectedAnswers', 'bestScore', 'updatedAt'])
+            && ownsParentDocument(userId, docId);
+          allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(docId) && isValidId(quizId);
+        }
+      }
+
+      // RAG vs. Standard AI Evaluation Comparisons
+      match /comparisons/{comparisonId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(comparisonId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(comparisonId)
+          && isValidComparisonRun(incoming(), userId)
+          && incoming().createdAt == request.time;
+        allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(comparisonId);
+      }
+    }
+  }
+}

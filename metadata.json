@@ -1,0 +1,6 @@
+{
+  "name": "AI Study Companion",
+  "description": "Course-grounded academic learning assistant using Retrieval-Augmented Generation (RAG) for document doubt-clearing, structured revision summaries, interactive quizzes, and grounded vs. standard LLM evaluation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

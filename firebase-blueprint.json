@@ -1,0 +1,471 @@
+{
+  "entities": {
+    "StudentProfile": {
+      "title": "StudentProfile",
+      "description": "Authenticated student profile and academic workspace metadata.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "program": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "rollNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "name", "email", "program", "rollNumber", "createdAt", "updatedAt"]
+    },
+    "StudyDocument": {
+      "title": "StudyDocument",
+      "description": "Metadata for an uploaded course PDF or lecture note indexed in the student's RAG binder.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "courseCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "uploadedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "pageCount": {
+          "type": "integer"
+        },
+        "totalChars": {
+          "type": "integer"
+        },
+        "chunkCount": {
+          "type": "integer"
+        },
+        "embeddingModel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "embeddingDimensions": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "title",
+        "courseCode",
+        "fileName",
+        "uploadedAt",
+        "pageCount",
+        "totalChars",
+        "chunkCount",
+        "embeddingModel",
+        "embeddingDimensions",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DocumentChunk": {
+      "title": "DocumentChunk",
+      "description": "Overlapping semantic passage extracted from a study document with dense and local cosine vectors.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "pageNumber": {
+          "type": "integer"
+        },
+        "chunkIndex": {
+          "type": "integer"
+        },
+        "sectionHeading": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "charCount": {
+          "type": "integer"
+        },
+        "overlapChars": {
+          "type": "integer"
+        },
+        "localEmbedding": {
+          "type": "array"
+        },
+        "geminiEmbedding": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "docId",
+        "docTitle",
+        "pageNumber",
+        "chunkIndex",
+        "text",
+        "charCount",
+        "overlapChars",
+        "localEmbedding",
+        "createdAt"
+      ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A single conversational turn in a document's doubt-clearing RAG or Concept Clarifier thread.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"]
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["rag", "clarifier"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "timestampLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "groundedInNotes": {
+          "type": "boolean"
+        },
+        "primarySource": {
+          "type": "string",
+          "enum": ["uploaded_notes", "general_knowledge", "not_in_notes"]
+        },
+        "provenanceSummary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "citations": {
+          "type": "array"
+        },
+        "vectorEngine": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "docId", "role", "mode", "content", "timestampLabel", "createdAt"]
+    },
+    "RevisionSummary": {
+      "title": "RevisionSummary",
+      "description": "Structured revision sheet generated from a study document.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "createdAtLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "overview": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "keyPoints": {
+          "type": "array"
+        },
+        "formulas": {
+          "type": "array"
+        },
+        "definitions": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "docId",
+        "docTitle",
+        "createdAtLabel",
+        "overview",
+        "keyPoints",
+        "formulas",
+        "definitions",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SavedQuiz": {
+      "title": "SavedQuiz",
+      "description": "5-question multiple-choice quiz and student attempt scores for a study document.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "createdAtLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "questions": {
+          "type": "array"
+        },
+        "selectedAnswers": {
+          "type": "object"
+        },
+        "bestScore": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "docId",
+        "docTitle",
+        "createdAtLabel",
+        "questions",
+        "selectedAnswers",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ComparisonRun": {
+      "title": "ComparisonRun",
+      "description": "Side-by-side Grounded RAG vs. Standard Ungrounded LLM evaluation record.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "createdAtLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "ragAnswer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "ragGrounded": {
+          "type": "boolean"
+        },
+        "citations": {
+          "type": "array"
+        },
+        "standardAnswer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "peakSimilarity": {
+          "type": "number"
+        },
+        "vectorEngine": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "docId",
+        "docTitle",
+        "question",
+        "createdAtLabel",
+        "ragAnswer",
+        "ragGrounded",
+        "citations",
+        "standardAnswer",
+        "peakSimilarity",
+        "vectorEngine",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/StudentProfile" },
+      "description": "Private student profile isolated to the authenticated owner."
+    },
+    "/users/{userId}/documents/{docId}": {
+      "schema": { "$ref": "#/entities/StudyDocument" },
+      "description": "Uploaded study document metadata owned by a student."
+    },
+    "/users/{userId}/documents/{docId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/DocumentChunk" },
+      "description": "Semantic chunks and vector embeddings belonging to a study document."
+    },
+    "/users/{userId}/documents/{docId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Doubt-clearing chat history scoped to a study document."
+    },
+    "/users/{userId}/documents/{docId}/summaries/{summaryId}": {
+      "schema": { "$ref": "#/entities/RevisionSummary" },
+      "description": "Saved revision summary for a study document."
+    },
+    "/users/{userId}/documents/{docId}/quizzes/{quizId}": {
+      "schema": { "$ref": "#/entities/SavedQuiz" },
+      "description": "Saved 5-question practice quiz and scores for a study document."
+    },
+    "/users/{userId}/comparisons/{comparisonId}": {
+      "schema": { "$ref": "#/entities/ComparisonRun" },
+      "description": "Saved RAG vs. Standard AI side-by-side evaluation runs."
+    }
+  }
+}
